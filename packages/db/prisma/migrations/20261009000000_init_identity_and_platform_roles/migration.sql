@@ -151,3 +151,31 @@ ALTER TABLE "membership_roles" FORCE ROW LEVEL SECURITY;
 CREATE POLICY "membership_roles_tenant_isolation" ON "membership_roles"
     USING ("org_id" = NULLIF(current_setting('app.org_id', true), '')::uuid)
     WITH CHECK ("org_id" = NULLIF(current_setting('app.org_id', true), '')::uuid);
+
+-- Platform roles (US-71) live outside every organisation. Writing them from a tenant-scoped
+-- transaction (app.org_id set) is always a bug or an attack, so the database refuses it even if
+-- application checks are bypassed. Platform setup, recovery and super-admin grants run without app.org_id.
+-- TODO(US-71 follow-up, with the story that creates cms_app/cms_migrator): REVOKE INSERT, UPDATE, DELETE
+-- on platform_roles and user_platform_roles from cms_app, and route platform-role writes through a
+-- dedicated role or a SECURITY DEFINER function that checks the caller.
+CREATE FUNCTION "refuse_platform_role_write_in_tenant_context"() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+BEGIN
+    IF NULLIF(current_setting('app.org_id', true), '') IS NOT NULL THEN
+        RAISE EXCEPTION 'platform roles cannot be changed from an organisation context'
+            USING ERRCODE = 'insufficient_privilege';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER "platform_roles_no_tenant_writes"
+    BEFORE INSERT OR UPDATE OR DELETE ON "platform_roles"
+    FOR EACH ROW EXECUTE FUNCTION "refuse_platform_role_write_in_tenant_context"();
+
+CREATE TRIGGER "user_platform_roles_no_tenant_writes"
+    BEFORE INSERT OR UPDATE OR DELETE ON "user_platform_roles"
+    FOR EACH ROW EXECUTE FUNCTION "refuse_platform_role_write_in_tenant_context"();
