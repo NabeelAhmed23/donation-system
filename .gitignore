@@ -2,3 +2,5 @@ node_modules/
 dist/
 coverage/
 packages/db/src/generated/
+*.tsbuildinfo
+package-lock.json

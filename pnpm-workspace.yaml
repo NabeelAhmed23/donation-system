@@ -6,3 +6,5 @@ onlyBuiltDependencies:
   - argon2
   - prisma
   - '@prisma/engines'
+  - 'apps/*'
+  - 'packages/*'
