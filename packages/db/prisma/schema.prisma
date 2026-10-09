@@ -42,16 +42,30 @@ model User {
 model Organisation {
   id              String   @id @default(uuid(7)) @db.Uuid
   name            String
+  /// Free-text information about the charity.
+  description     String?
   /// ISO 3166-1 alpha-2, e.g. GB.
   country         String
   /// ISO 4217, e.g. GBP.
   defaultCurrency String   @map("default_currency")
   /// IANA time zone, e.g. Europe/London.
   timeZone        String   @map("time_zone")
+  /// Stored lower-cased (CHECK constraint in the migration).
+  contactEmail    String?  @map("contact_email")
+  contactPhone    String?  @map("contact_phone")
+  addressLine1    String?  @map("address_line1")
+  addressLine2    String?  @map("address_line2")
+  city            String?
+  region          String?
+  postalCode      String?  @map("postal_code")
+  /// Optimistic-concurrency version: a settings change applies only to the version it was based on.
+  version         Int      @default(1)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  memberships Membership[]
-  roles       Role[]
+  memberships  Membership[]
+  roles        Role[]
+  auditEntries AuditLog[]
 
   @@map("organisations")
 }
@@ -80,6 +94,7 @@ model Role {
 
   organisation Organisation     @relation(fields: [orgId], references: [id])
   memberships  MembershipRole[]
+  permissions  RolePermission[]
 
   @@unique([orgId, id])
   @@unique([orgId, name])
@@ -99,6 +114,41 @@ model MembershipRole {
   @@id([membershipId, roleId])
   @@index([orgId, roleId])
   @@map("membership_roles")
+}
+
+/// One action (view, create, edit, delete, approve, manage; CHECK constraint in the migration) on one
+/// area of the organisation, granted to a role. A user's effective permissions are the union over their roles.
+model RolePermission {
+  orgId     String   @map("org_id") @db.Uuid
+  roleId    String   @map("role_id") @db.Uuid
+  area      String
+  action    String
+  grantedAt DateTime @default(now()) @map("granted_at") @db.Timestamptz(3)
+
+  role Role @relation(fields: [orgId, roleId], references: [orgId, id], onDelete: Cascade)
+
+  @@id([roleId, area, action])
+  @@index([orgId])
+  @@map("role_permissions")
+}
+
+/// Append-only record of who changed what and when (REQ-048). UPDATE and DELETE are refused by a trigger
+/// in the migration; rows are visible only inside their organisation's tenant context (RLS).
+model AuditLog {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  orgId       String   @map("org_id") @db.Uuid
+  actorUserId String   @map("actor_user_id") @db.Uuid
+  action      String
+  entity      String
+  entityId    String   @map("entity_id") @db.Uuid
+  before      Json?
+  after       Json?
+  at          DateTime @default(now()) @map("ts") @db.Timestamptz(3)
+
+  organisation Organisation @relation(fields: [orgId], references: [id])
+
+  @@index([orgId, at])
+  @@map("audit_log")
 }
 
 /// System-level roles (e.g. super_admin). Outside every organisation's RBAC (US-71).

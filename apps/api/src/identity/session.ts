@@ -6,6 +6,11 @@ export interface AuthenticatedSession {
 
 /** The parts of the server-side session (e.g. @fastify/session) the identity module relies on. */
 export interface HttpSession extends Partial<AuthenticatedSession> {
+  /**
+   * The signed-in user's organisation, resolved from their membership at sign-in (HTTP bootstrap story).
+   * Organisation-scoped routes take the organisation only from here. Absent for platform accounts.
+   */
+  orgId?: string;
   /** Present while the session is impersonating another user (written by the impersonation story, US-48). */
   impersonationSessionId?: string;
   /** Replaces the session with a fresh one under a new ID; afterwards `request.session` is the new session. */
