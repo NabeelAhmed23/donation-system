@@ -68,3 +68,27 @@ DATABASE_URL=... SUPER_ADMIN_EMAIL=ops@example.org SUPER_ADMIN_PASSWORD_FILE=/ru
 
 This sets the given password, reactivates the account and requires a password change at the next
 sign-in. It only works for an account that already holds the super administrator role.
+
+**Recovery does not yet end live sessions.** A session that was already signed in keeps its
+own copy of the password-change flag and stays valid until it expires. Password change has the
+same gap: it rotates only the caller's session. If you run recovery because the account may be
+compromised, also flush the session store (restart Redis or delete its session keys) until the
+follow-up below lands.
+
+## Known follow-ups from US-71
+
+These are tracked against later stories and are not done here:
+
+- **HTTP bootstrap and sessions.** No AppModule, `main.ts` or `@fastify/session` exists yet.
+  `IdentityModule.register(...)` must be imported after the session middleware and `SessionGuard`.
+  If it is not, the guard sees no `userId` and defers on every request. That story must add an HTTP
+  end-to-end test: seeded login → any other route returns 403 `PASSWORD_CHANGE_REQUIRED` →
+  password change → route allowed.
+- **Revoking every session.** Once the per-user session index exists, `recoverSuperAdmin` and a
+  successful password change must end all of the user's other sessions.
+- **Audit trail.** Creating the initial account, break-glass recovery, and platform-role grant and
+  revoke must write entries to the append-only `audit_log` in the same transaction once that table
+  exists (REQ-048).
+- **Lockfile.** The repository still has an npm `package-lock.json` and no `pnpm-lock.yaml`.
+  Replace it with the lockfile produced by `pnpm install`, and use `pnpm install --frozen-lockfile`
+  in CI.
