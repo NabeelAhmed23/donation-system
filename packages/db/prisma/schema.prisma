@@ -1,0 +1,117 @@
+generator client {
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "esm"
+  importFileExtension = "js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserStatus {
+  active
+  suspended
+  deactivated
+
+  @@map("user_status")
+}
+
+/// Global identity. Emails are stored lower-cased (enforced by a CHECK constraint in the migration).
+model User {
+  id                 String     @id @default(uuid(7)) @db.Uuid
+  email              String     @unique
+  passwordHash       String     @map("password_hash")
+  mustChangePassword Boolean    @default(false) @map("must_change_password")
+  passwordChangedAt  DateTime?  @map("password_changed_at") @db.Timestamptz(3)
+  status             UserStatus @default(active)
+  createdAt          DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  membership    Membership?
+  platformRoles UserPlatformRole[]
+
+  @@map("users")
+}
+
+model Organisation {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  memberships Membership[]
+  roles       Role[]
+
+  @@map("organisations")
+}
+
+/// A user's link to their (single) organisation.
+model Membership {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  userId    String   @unique @map("user_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organisation Organisation     @relation(fields: [orgId], references: [id])
+  user         User             @relation(fields: [userId], references: [id])
+  roles        MembershipRole[]
+
+  @@unique([orgId, id])
+  @@map("memberships")
+}
+
+/// An organisation-defined role. Platform roles never live here.
+model Role {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  orgId     String   @map("org_id") @db.Uuid
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  organisation Organisation     @relation(fields: [orgId], references: [id])
+  memberships  MembershipRole[]
+
+  @@unique([orgId, id])
+  @@unique([orgId, name])
+  @@map("roles")
+}
+
+/// Composite (org_id, …) foreign keys stop a role from being linked to a member of another organisation.
+model MembershipRole {
+  orgId        String   @map("org_id") @db.Uuid
+  membershipId String   @map("membership_id") @db.Uuid
+  roleId       String   @map("role_id") @db.Uuid
+  assignedAt   DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+
+  membership Membership @relation(fields: [orgId, membershipId], references: [orgId, id])
+  role       Role       @relation(fields: [orgId, roleId], references: [orgId, id])
+
+  @@id([membershipId, roleId])
+  @@index([orgId, roleId])
+  @@map("membership_roles")
+}
+
+/// System-level roles (e.g. super_admin). Outside every organisation's RBAC (US-71).
+model PlatformRole {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  key       String   @unique
+  name      String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  holders UserPlatformRole[]
+
+  @@map("platform_roles")
+}
+
+model UserPlatformRole {
+  userId          String   @map("user_id") @db.Uuid
+  platformRoleId  String   @map("platform_role_id") @db.Uuid
+  grantedByUserId String?  @map("granted_by_user_id") @db.Uuid
+  grantedAt       DateTime @default(now()) @map("granted_at") @db.Timestamptz(3)
+
+  user         User         @relation(fields: [userId], references: [id])
+  platformRole PlatformRole @relation(fields: [platformRoleId], references: [id])
+
+  @@id([userId, platformRoleId])
+  @@index([platformRoleId])
+  @@map("user_platform_roles")
+}
