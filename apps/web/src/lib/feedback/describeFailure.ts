@@ -8,6 +8,7 @@ export type FailureKind =
   | 'not-found'
   | 'rate-limited'
   | 'network'
+  | 'indeterminate'
   | 'unknown';
 
 export interface FailureMessage {
@@ -89,7 +90,15 @@ export function describeFailure(error: unknown, action: string): FailureMessage 
       `We could not ${action} because too many requests were made. ${NOTHING_CHANGED} Wait a moment, then try again.`,
     );
   }
-  // 5xx and anything unexpected: never surface server detail, it may describe internals.
+  if (status === 502 || status === 503 || status === 504) {
+    // The proxy can answer after the API has already committed the write, so never claim it failed.
+    return failure(
+      'indeterminate',
+      'Result unknown',
+      `The server did not answer properly while trying to ${action}, so we cannot confirm whether it worked. Reload to check before trying again.`,
+    );
+  }
+  // Other 5xx and anything unexpected: never surface server detail, it may describe internals.
   return unknownFailure(action);
 }
 

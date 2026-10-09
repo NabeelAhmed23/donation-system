@@ -22,8 +22,8 @@ export interface CancelDonationButtonProps {
 const defaultIdempotencyKey = () => crypto.randomUUID();
 
 // Failures where the server definitely did not apply the request; a retry gets a fresh key so it
-// is not answered with a replay of the failed attempt. Network and unknown failures keep the key,
-// so a retry can never cancel twice.
+// is not answered with a replay of the failed attempt. Network, indeterminate and unknown failures
+// keep the key, so a retry can never cancel twice.
 const DEFINITE_FAILURES = new Set(['validation', 'permission', 'session-expired', 'conflict', 'not-found', 'rate-limited']);
 
 export function CancelDonationButton({
@@ -41,6 +41,7 @@ export function CancelDonationButton({
   const save = useSave((key: string, input: CancelDonationInput) => cancelDonation(api, donation, input, key), {
     action: 'cancel this donation',
     onSuccess: (updated) => {
+      clearDraft(draftKey);
       setOpened(false);
       onCancelled?.(updated);
     },
@@ -61,6 +62,8 @@ export function CancelDonationButton({
     if (save.saving) {
       return;
     }
+    // A draft stashed after a 401 must not reopen a confirmation the user has walked away from.
+    clearDraft(draftKey);
     setOpened(false);
     setReason('');
     save.reset();
