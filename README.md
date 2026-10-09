@@ -92,6 +92,31 @@ These are tracked against later stories and are not done here:
 - **Lockfile.** The repository still has an npm `package-lock.json` and no `pnpm-lock.yaml`.
   Replace it with the lockfile produced by `pnpm install`, and use `pnpm install --frozen-lockfile`
   in CI.
+
+## Known follow-ups from US-1
+
+`POST /platform/organisations` creates the organisation, its default roles and the initial
+administrator's membership in one transaction. These parts are not done here:
+
+- **Invitations are not issued yet.** A new initial administrator is created with status `invited`
+  and no password, and nothing yet sends them an invitation. Until the user-invitation story adds
+  invitation tokens (SHA-256 stored, 72-hour lifetime), the `UserInvited` outbox event and invitation
+  acceptance, that administrator cannot sign in. That story must write the token and the outbox row
+  inside `runInNewOrganisation` (`apps/api/src/organisations/prisma-organisation.store.ts`). It must
+  also let a super administrator resend the invitation to an initial administrator who has not
+  accepted it, because until they do the organisation has no active administrator (US-1 edge case).
+  An existing user with no organisation who is named as the administrator stays `active` and needs
+  no invitation.
+- **Audit trail.** Creating an organisation, creating its invited administrator and assigning the
+  Organisation Administrator role must each write an `audit_log` entry in the same
+  `runInNewOrganisation` transaction once that table exists (REQ-048: organisation configuration
+  changes, user creation, role changes).
+- **UI route.** `CreateOrganisationForm` (`apps/web/src/features/organisations`) is not mounted
+  yet. `main.tsx` has no router, no app shell and no `/me` permissions payload. The app-shell story
+  must mount the form on a route that only a super administrator can see, and test that an
+  organisation administrator is not shown it. Until then the API refuses everyone else with 403
+  `PLATFORM_ACCESS_REFUSED`, and the form reports that refusal.
+
 ## Architecture
 
 - [Extension points for charity-specific features](docs/architecture/extension-points.md) (US-67, REQ-063)

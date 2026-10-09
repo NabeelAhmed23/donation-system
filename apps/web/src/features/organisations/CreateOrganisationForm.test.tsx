@@ -82,18 +82,43 @@ describe('CreateOrganisationForm', () => {
     expect(screen.getByLabelText('Organisation name')).toHaveValue('Hope Trust');
   });
 
-  it('reports that the administrator belongs to another organisation', async () => {
+  it('says the administrator already belongs to an organisation and must be migrated', async () => {
     const request = vi.fn().mockRejectedValue(
       new ApiError({
         status: 409,
         code: 'INITIAL_ADMIN_IN_ANOTHER_ORGANISATION',
-        detail: 'This person already belongs to an organisation and must be migrated',
+        detail:
+          'This person already belongs to an organisation and must be migrated instead of being added as the administrator of a new one',
       }),
     );
     renderWithMantine(<CreateOrganisationForm api={request as unknown as ApiClient} />);
 
     await fill(hopeTrust);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Changed by someone else');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Administrator already belongs to an organisation');
+    expect(alert).toHaveTextContent('already belongs to an organisation');
+    expect(alert).toHaveTextContent('migrated');
+    expect(alert).not.toHaveTextContent('Changed by someone else');
+    expect(screen.getByLabelText('Initial administrator email')).toHaveValue('admin@hopetrust.example');
+  });
+
+  it('says the organisation name is already in use', async () => {
+    const request = vi.fn().mockRejectedValue(
+      new ApiError({
+        status: 409,
+        code: 'ORGANISATION_NAME_TAKEN',
+        detail: "An organisation called 'Hope Trust' already exists",
+      }),
+    );
+    renderWithMantine(<CreateOrganisationForm api={request as unknown as ApiClient} />);
+
+    await fill(hopeTrust);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Organisation name already in use');
+    expect(alert).toHaveTextContent("An organisation called 'Hope Trust' already exists");
+    expect(alert).not.toHaveTextContent('Changed by someone else');
+    expect(screen.getByLabelText('Organisation name')).toHaveValue('Hope Trust');
   });
 });
