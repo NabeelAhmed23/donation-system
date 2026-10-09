@@ -1,5 +1,8 @@
 # donation-system
 
+## Architecture
+
+- [Extension points for charity-specific features](docs/architecture/extension-points.md) (US-67, REQ-063)
 Charity donation management CMS (pnpm monorepo).
 
 ## Workspace
