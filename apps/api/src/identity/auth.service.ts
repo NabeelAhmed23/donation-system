@@ -22,10 +22,13 @@ export class AuthService {
     private readonly clock: () => Date = () => new Date(),
   ) {}
 
-  /** Every failure looks the same to the caller, and unknown emails still pay for a hash verification. */
+  /**
+   * Every failure looks the same to the caller. Unknown emails, and invited users who have no password
+   * yet, still pay for a hash verification.
+   */
   async login(email: string, password: string): Promise<LoginResult> {
     const user = await this.store.findUserByEmail(normaliseEmail(email));
-    if (!user) {
+    if (!user || user.passwordHash === null) {
       await this.hasher.verify(await this.getDummyHash(), password);
       return { ok: false };
     }
@@ -36,7 +39,12 @@ export class AuthService {
 
   async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<{ mustChangePassword: false }> {
     const user = await this.store.findUserById(userId);
-    if (!user || user.status !== 'active' || !(await this.hasher.verify(user.passwordHash, currentPassword))) {
+    if (
+      !user ||
+      user.status !== 'active' ||
+      user.passwordHash === null ||
+      !(await this.hasher.verify(user.passwordHash, currentPassword))
+    ) {
       throw new InvalidCredentialsError();
     }
     // Also stops the initial super administrator from "changing" to the bootstrap password.
