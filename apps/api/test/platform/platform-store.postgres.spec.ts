@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@cms/db';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { OrganisationService } from '../../src/organisations/organisation.service.js';
+import { PrismaOrganisationStore } from '../../src/organisations/prisma-organisation.store.js';
 import { SUPER_ADMIN_ROLE_KEY } from '../../src/platform/platform-roles.js';
 import { PrismaPlatformStore } from '../../src/platform/prisma-platform.store.js';
 import { setupPlatform } from '../../src/platform/setup-platform.js';
@@ -9,6 +11,10 @@ import { FakeHasher, RecordingLogger } from '../support/in-memory-database.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const credentials = { email: 'root@example.org', password: 'initial-Secret-123' };
+
+function organisationInput(name: string, initialAdministratorEmail: string) {
+  return { name, country: 'GB', defaultCurrency: 'GBP', timeZone: 'Europe/London', initialAdministratorEmail };
+}
 
 describe.skipIf(!databaseUrl)('platform roles on PostgreSQL', () => {
   let prisma: PrismaClient;
@@ -40,6 +46,16 @@ describe.skipIf(!databaseUrl)('platform roles on PostgreSQL', () => {
       await tx.$executeRaw`SELECT set_config('app.org_id', ${orgId}, true)`;
       return work(tx);
     });
+  }
+
+  async function signedInSuperAdmin() {
+    await setupPlatform(depsFor(prisma), () => credentials);
+    const holder = await prisma.userPlatformRole.findFirstOrThrow({ select: { userId: true } });
+    return { userId: holder.userId, impersonating: false };
+  }
+
+  function organisationsOn(client: PrismaClient) {
+    return new OrganisationService(new PrismaOrganisationStore(client));
   }
 
   it('creates one role and one account when two setups race on separate connections', async () => {
@@ -100,7 +116,9 @@ describe.skipIf(!databaseUrl)('platform roles on PostgreSQL', () => {
     const orgId = randomUUID();
 
     const answers = await inTenant(orgId, async (tx) => {
-      await tx.organisation.create({ data: { id: orgId, name: 'Org A' } });
+      await tx.organisation.create({
+        data: { id: orgId, name: 'Org A', country: 'GB', defaultCurrency: 'GBP', timeZone: 'Europe/London' },
+      });
       const orgRole = await tx.role.create({ data: { orgId, name: 'Member' }, select: { id: true } });
       const store = new PrismaRoleAssignmentStore(tx);
       return {
@@ -112,5 +130,69 @@ describe.skipIf(!databaseUrl)('platform roles on PostgreSQL', () => {
     });
 
     expect(answers).toEqual({ byKey: true, byId: true, orgRole: false, unknown: false });
+  });
+
+  it('creates an organisation whose invited administrator holds the administrator role there only', async () => {
+    const actor = await signedInSuperAdmin();
+
+    const created = await organisationsOn(prisma).create(actor, organisationInput('Hope Trust', 'admin@hopetrust.example'));
+
+    const stored = await inTenant(created.id, async (tx) => ({
+      organisations: await tx.organisation.findMany({
+        select: { id: true, name: true, country: true, defaultCurrency: true, timeZone: true },
+      }),
+      roles: await tx.role.findMany({ where: { orgId: created.id }, select: { name: true }, orderBy: { name: 'asc' } }),
+      admin: await tx.user.findUniqueOrThrow({
+        where: { email: 'admin@hopetrust.example' },
+        select: {
+          status: true,
+          passwordHash: true,
+          membership: { select: { orgId: true, roles: { select: { role: { select: { orgId: true, name: true } } } } } },
+        },
+      }),
+    }));
+
+    expect(stored.organisations).toEqual([
+      { id: created.id, name: 'Hope Trust', country: 'GB', defaultCurrency: 'GBP', timeZone: 'Europe/London' },
+    ]);
+    expect(stored.roles).toEqual([{ name: 'Donation Manager' }, { name: 'Member' }, { name: 'Organisation Administrator' }]);
+    expect(stored.admin).toEqual({
+      status: 'invited',
+      passwordHash: null,
+      membership: { orgId: created.id, roles: [{ role: { orgId: created.id, name: 'Organisation Administrator' } }] },
+    });
+  });
+
+  it('creates only one organisation when two super administrators use the same name at once', async () => {
+    const actor = await signedInSuperAdmin();
+
+    const results = await Promise.allSettled([
+      organisationsOn(prisma).create(actor, organisationInput('Hope Trust', 'first@hopetrust.example')),
+      organisationsOn(otherPrisma).create(actor, organisationInput('hope trust', 'second@hopetrust.example')),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const refused = results.find((r) => r.status === 'rejected');
+    expect(refused?.status === 'rejected' && refused.reason).toMatchObject({ code: 'ORGANISATION_NAME_TAKEN' });
+    expect(
+      await prisma.user.count({ where: { email: { in: ['first@hopetrust.example', 'second@hopetrust.example'] } } }),
+    ).toBe(1);
+  });
+
+  it('refuses an administrator who belongs to another organisation and leaves nothing behind', async () => {
+    const actor = await signedInSuperAdmin();
+    const service = organisationsOn(prisma);
+    await service.create(actor, organisationInput('Hope Trust', 'admin@hopetrust.example'));
+    const usersBefore = await prisma.user.count();
+
+    await expect(
+      service.create(actor, organisationInput('Light Foundation', 'admin@hopetrust.example')),
+    ).rejects.toMatchObject({ code: 'INITIAL_ADMIN_IN_ANOTHER_ORGANISATION' });
+
+    expect(await prisma.user.count()).toBe(usersBefore);
+    // The refused organisation was rolled back, so its name is still free.
+    await expect(
+      service.create(actor, organisationInput('Light Foundation', 'admin@light.example')),
+    ).resolves.toMatchObject({ name: 'Light Foundation' });
   });
 });

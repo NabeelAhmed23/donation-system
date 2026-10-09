@@ -13,15 +13,18 @@ enum UserStatus {
   active
   suspended
   deactivated
+  /// Created by an invitation that has not been accepted yet; has no password and cannot sign in.
+  invited
 
   @@map("user_status")
 }
 
 /// Global identity. Emails are stored lower-cased (enforced by a CHECK constraint in the migration).
+/// Only an invited user may have no password hash (CHECK constraint in the migration).
 model User {
   id                 String     @id @default(uuid(7)) @db.Uuid
   email              String     @unique
-  passwordHash       String     @map("password_hash")
+  passwordHash       String?    @map("password_hash")
   mustChangePassword Boolean    @default(false) @map("must_change_password")
   passwordChangedAt  DateTime?  @map("password_changed_at") @db.Timestamptz(3)
   status             UserStatus @default(active)
@@ -34,10 +37,18 @@ model User {
   @@map("users")
 }
 
+/// A charity (tenant). Names are unique case-insensitively, and country and currency are ISO codes
+/// (expression index and CHECK constraints in the migration).
 model Organisation {
-  id        String   @id @default(uuid(7)) @db.Uuid
-  name      String
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  id              String   @id @default(uuid(7)) @db.Uuid
+  name            String
+  /// ISO 3166-1 alpha-2, e.g. GB.
+  country         String
+  /// ISO 4217, e.g. GBP.
+  defaultCurrency String   @map("default_currency")
+  /// IANA time zone, e.g. Europe/London.
+  timeZone        String   @map("time_zone")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 
   memberships Membership[]
   roles       Role[]

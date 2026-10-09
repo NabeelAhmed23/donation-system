@@ -6,6 +6,8 @@ export interface AuthenticatedSession {
 
 /** The parts of the server-side session (e.g. @fastify/session) the identity module relies on. */
 export interface HttpSession extends Partial<AuthenticatedSession> {
+  /** Present while the session is impersonating another user (written by the impersonation story, US-48). */
+  impersonationSessionId?: string;
   /** Replaces the session with a fresh one under a new ID; afterwards `request.session` is the new session. */
   regenerate(): Promise<void>;
   destroy(): Promise<void>;

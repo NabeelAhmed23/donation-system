@@ -1,9 +1,10 @@
-export type UserStatus = 'active' | 'suspended' | 'deactivated';
+export type UserStatus = 'active' | 'suspended' | 'deactivated' | 'invited';
 
 export interface IdentityUser {
   id: string;
   email: string;
-  passwordHash: string;
+  /** Null until an invited user accepts their invitation and sets a password. */
+  passwordHash: string | null;
   mustChangePassword: boolean;
   status: UserStatus;
 }
