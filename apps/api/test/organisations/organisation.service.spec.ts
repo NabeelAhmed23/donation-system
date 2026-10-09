@@ -73,6 +73,24 @@ describe('OrganisationService.create', () => {
     expect(db.roles.every((r) => r.orgId === created.id)).toBe(true);
   });
 
+  it('lets only the organisation administrator role view and edit the organisation settings', async () => {
+    const { db, superAdmin, service } = await platform();
+
+    const created = await service.create(superAdmin, hopeTrust);
+
+    const grantsByRole = Object.fromEntries(
+      db.roles
+        .filter((r) => r.orgId === created.id)
+        .map((r) => [r.name, db.rolePermissions.filter((p) => p.roleId === r.id).map((p) => `${p.area}:${p.action}`)]),
+    );
+    expect(grantsByRole).toEqual({
+      'Organisation Administrator': ['organisation-settings:view', 'organisation-settings:edit'],
+      'Donation Manager': [],
+      Member: [],
+    });
+    expect(db.rolePermissions.every((p) => p.orgId === created.id)).toBe(true);
+  });
+
   it('normalises the submitted values', async () => {
     const { db, superAdmin, service } = await platform();
 
@@ -174,6 +192,7 @@ describe('OrganisationService.create', () => {
     await service.create(superAdmin, hopeTrust);
     const usersBefore = db.users.size;
     const rolesBefore = db.roles.length;
+    const permissionsBefore = db.rolePermissions.length;
 
     const error = await service
       .create(superAdmin, { ...lightFoundation, initialAdministratorEmail: hopeTrust.initialAdministratorEmail })
@@ -186,6 +205,7 @@ describe('OrganisationService.create', () => {
     expect(db.organisations.map((o) => o.name)).toEqual(['Hope Trust']);
     expect(db.users.size).toBe(usersBefore);
     expect(db.roles).toHaveLength(rolesBefore);
+    expect(db.rolePermissions).toHaveLength(permissionsBefore);
   });
 
   it('refuses an active member of another organisation as the initial administrator', async () => {

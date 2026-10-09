@@ -1,4 +1,5 @@
 import type { UserStatus } from '../identity/identity.store.js';
+import type { Permission } from '../rbac/permissions.js';
 import type { NewOrganisationSettings } from './new-organisation.js';
 
 export interface ExistingUser {
@@ -14,6 +15,7 @@ export interface NewOrganisationTx {
   findUserByEmail(email: string): Promise<ExistingUser | null>;
   createInvitedUser(email: string): Promise<{ id: string; status: UserStatus }>;
   createRoles(names: readonly string[]): Promise<{ id: string; name: string }[]>;
+  grantPermissions(roleId: string, permissions: readonly Permission[]): Promise<void>;
   /** Null when the user already belongs to an organisation: a user belongs to exactly one. */
   insertMembership(userId: string): Promise<string | null>;
   assignRole(membershipId: string, roleId: string): Promise<void>;

@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient } from '@cms/db';
 import { isUuid } from '../common/uuid.js';
 import type { UserStatus } from '../identity/identity.store.js';
+import type { Permission } from '../rbac/permissions.js';
 import type { NewOrganisationSettings } from './new-organisation.js';
 import type { ExistingUser, NewOrganisationTx, OrganisationStore } from './organisation.store.js';
 
@@ -65,6 +66,12 @@ class PrismaNewOrganisationTx implements NewOrganisationTx {
     return this.tx.role.createManyAndReturn({
       data: names.map((name) => ({ orgId: this.orgId, name })),
       select: { id: true, name: true },
+    });
+  }
+
+  async grantPermissions(roleId: string, permissions: readonly Permission[]): Promise<void> {
+    await this.tx.rolePermission.createMany({
+      data: permissions.map(({ area, action }) => ({ orgId: this.orgId, roleId, area, action })),
     });
   }
 

@@ -1,19 +1,34 @@
 import { randomUUID } from 'node:crypto';
+import type { AuditEntry } from '../../src/audit/audit-entry.js';
 import type { LogFields, Logger } from '../../src/common/logger.js';
 import type { IdentityStore, IdentityUser, PasswordUpdate } from '../../src/identity/identity.store.js';
 import type { PasswordHasher } from '../../src/identity/password-hasher.js';
 import type { NewOrganisationSettings } from '../../src/organisations/new-organisation.js';
+import type { OrganisationDetails, OrganisationSettings } from '../../src/organisations/organisation-settings.js';
+import type { OrganisationSettingsStore, OrganisationSettingsTx } from '../../src/organisations/organisation-settings.store.js';
 import type { NewOrganisationTx, OrganisationStore } from '../../src/organisations/organisation.store.js';
 import type { PlatformStore, PlatformTx } from '../../src/platform/platform.store.js';
+import type { PermissionAction } from '../../src/rbac/permissions.js';
 import type { RoleAssignmentStore } from '../../src/rbac/role-assignment.store.js';
 
 export interface StoredUser extends IdentityUser {
   passwordChangedAt: Date | null;
 }
 
-export interface StoredOrganisation extends NewOrganisationSettings {
+/** Details and version are absent until the settings are first changed (the columns' defaults). */
+export interface StoredOrganisation extends NewOrganisationSettings, Partial<OrganisationDetails> {
   id: string;
+  version?: number;
 }
+
+export interface StoredRolePermission {
+  orgId: string;
+  roleId: string;
+  area: string;
+  action: PermissionAction;
+}
+
+export type StoredAuditEntry = AuditEntry & { orgId: string };
 
 interface Snapshot {
   users: Map<string, StoredUser>;
@@ -21,13 +36,18 @@ interface Snapshot {
   memberships: { id: string; orgId: string; userId: string }[];
   roles: { id: string; orgId: string; name: string }[];
   membershipRoles: { orgId: string; membershipId: string; roleId: string }[];
+  rolePermissions: StoredRolePermission[];
+  auditLog: StoredAuditEntry[];
 }
 
 /**
- * In-memory stand-in for PostgreSQL. runExclusive and runInNewOrganisation serialise work like the
- * advisory locks do; runInNewOrganisation also rolls back when its work throws.
+ * In-memory stand-in for PostgreSQL. runExclusive, runInNewOrganisation and runInOrganisation serialise
+ * work like the advisory locks and row locks do; the organisation transactions also roll back when their
+ * work throws.
  */
-export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssignmentStore, OrganisationStore {
+export class InMemoryDatabase
+  implements PlatformStore, IdentityStore, RoleAssignmentStore, OrganisationStore, OrganisationSettingsStore
+{
   readonly users = new Map<string, StoredUser>();
   readonly organisations: StoredOrganisation[] = [];
   readonly platformRoles: { id: string; key: string; name: string }[] = [];
@@ -35,6 +55,8 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
   readonly memberships: { id: string; orgId: string; userId: string }[] = [];
   readonly roles: { id: string; orgId: string; name: string }[] = [];
   readonly membershipRoles: { orgId: string; membershipId: string; roleId: string }[] = [];
+  readonly rolePermissions: StoredRolePermission[] = [];
+  readonly auditLog: StoredAuditEntry[] = [];
   private exclusive: Promise<unknown> = Promise.resolve();
 
   runExclusive<T>(work: (tx: PlatformTx) => Promise<T>): Promise<T> {
@@ -92,17 +114,7 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
   }
 
   runInNewOrganisation<T>(orgId: string, work: (tx: NewOrganisationTx) => Promise<T>): Promise<T> {
-    const run = this.exclusive.then(async () => {
-      const snapshot = this.snapshot();
-      try {
-        return await work(this.newOrganisationTx(orgId));
-      } catch (error) {
-        this.restore(snapshot);
-        throw error;
-      }
-    });
-    this.exclusive = run.catch(() => undefined);
-    return run;
+    return this.atomically(() => work(this.newOrganisationTx(orgId)));
   }
 
   private newOrganisationTx(orgId: string): NewOrganisationTx {
@@ -125,6 +137,9 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
         return { id, status: 'invited' };
       },
       createRoles: async (names) => names.map((name) => ({ id: this.addOrganisationRole(orgId, name), name })),
+      grantPermissions: async (roleId, permissions) => {
+        permissions.forEach(({ area, action }) => this.rolePermissions.push({ orgId, roleId, area, action }));
+      },
       insertMembership: async (userId) => {
         if (this.memberships.some((m) => m.userId === userId)) return null;
         const id = randomUUID();
@@ -133,6 +148,48 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
       },
       assignRole: async (membershipId, roleId) => {
         this.membershipRoles.push({ orgId, membershipId, roleId });
+      },
+    };
+  }
+
+  // OrganisationSettingsStore
+  runInOrganisation<T>(orgId: string, work: (tx: OrganisationSettingsTx) => Promise<T>): Promise<T> {
+    return this.atomically(() => work(this.organisationSettingsTx(orgId)));
+  }
+
+  private organisationSettingsTx(orgId: string): OrganisationSettingsTx {
+    return {
+      permissionsOf: async (userId) => {
+        if (this.users.get(userId)?.status !== 'active') return [];
+        const membership = this.memberships.find((m) => m.orgId === orgId && m.userId === userId);
+        if (!membership) return [];
+        const roleIds = this.membershipRoles
+          .filter((mr) => mr.orgId === orgId && mr.membershipId === membership.id)
+          .map((mr) => mr.roleId);
+        return this.rolePermissions
+          .filter((p) => p.orgId === orgId && roleIds.includes(p.roleId))
+          .map(({ area, action }) => ({ area, action }));
+      },
+      findSettings: async () => {
+        const organisation = this.organisations.find((o) => o.id === orgId);
+        return organisation ? settingsOf(organisation) : null;
+      },
+      updateSettings: async (expectedVersion, changes) => {
+        const index = this.organisations.findIndex((o) => o.id === orgId);
+        if (index === -1 || settingsOf(this.organisations[index]).version !== expectedVersion) {
+          return { ok: false, reason: 'STALE' };
+        }
+        const name = changes.name?.toLowerCase();
+        if (name !== undefined && this.organisations.some((o) => o.id !== orgId && o.name.toLowerCase() === name)) {
+          return { ok: false, reason: 'NAME_TAKEN' };
+        }
+        // Replaced rather than mutated, so a rollback restores the previous object.
+        const updated = { ...this.organisations[index], ...changes, version: expectedVersion + 1 };
+        this.organisations[index] = updated;
+        return { ok: true, settings: settingsOf(updated) };
+      },
+      appendAudit: async (entry) => {
+        this.auditLog.push({ orgId, ...entry });
       },
     };
   }
@@ -199,6 +256,20 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
     return id;
   }
 
+  private atomically<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.exclusive.then(async () => {
+      const snapshot = this.snapshot();
+      try {
+        return await work();
+      } catch (error) {
+        this.restore(snapshot);
+        throw error;
+      }
+    });
+    this.exclusive = run.catch(() => undefined);
+    return run;
+  }
+
   private findByEmail(email: string): StoredUser | undefined {
     return [...this.users.values()].find((u) => u.email === email);
   }
@@ -210,6 +281,8 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
       memberships: [...this.memberships],
       roles: [...this.roles],
       membershipRoles: [...this.membershipRoles],
+      rolePermissions: [...this.rolePermissions],
+      auditLog: [...this.auditLog],
     };
   }
 
@@ -220,7 +293,28 @@ export class InMemoryDatabase implements PlatformStore, IdentityStore, RoleAssig
     this.memberships.splice(0, this.memberships.length, ...snapshot.memberships);
     this.roles.splice(0, this.roles.length, ...snapshot.roles);
     this.membershipRoles.splice(0, this.membershipRoles.length, ...snapshot.membershipRoles);
+    this.rolePermissions.splice(0, this.rolePermissions.length, ...snapshot.rolePermissions);
+    this.auditLog.splice(0, this.auditLog.length, ...snapshot.auditLog);
   }
+}
+
+function settingsOf(organisation: StoredOrganisation): OrganisationSettings {
+  return {
+    id: organisation.id,
+    version: organisation.version ?? 1,
+    name: organisation.name,
+    description: organisation.description ?? null,
+    country: organisation.country,
+    defaultCurrency: organisation.defaultCurrency,
+    timeZone: organisation.timeZone,
+    contactEmail: organisation.contactEmail ?? null,
+    contactPhone: organisation.contactPhone ?? null,
+    addressLine1: organisation.addressLine1 ?? null,
+    addressLine2: organisation.addressLine2 ?? null,
+    city: organisation.city ?? null,
+    region: organisation.region ?? null,
+    postalCode: organisation.postalCode ?? null,
+  };
 }
 
 export class FakeHasher implements PasswordHasher {

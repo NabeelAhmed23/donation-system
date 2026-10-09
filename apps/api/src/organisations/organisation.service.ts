@@ -3,7 +3,12 @@ import { uuidv7 } from '../common/uuid.js';
 import type { UserStatus } from '../identity/identity.store.js';
 import { PlatformAccessRefusedError } from '../platform/errors.js';
 import { SUPER_ADMIN_ROLE_KEY } from '../platform/platform-roles.js';
-import { DEFAULT_ORGANISATION_ROLE_NAMES, ORGANISATION_ADMINISTRATOR_ROLE_NAME } from '../rbac/default-roles.js';
+import {
+  DEFAULT_ORGANISATION_ROLE_NAMES,
+  DEFAULT_ROLE_PERMISSIONS,
+  ORGANISATION_ADMINISTRATOR_ROLE_NAME,
+  type DefaultOrganisationRoleName,
+} from '../rbac/default-roles.js';
 import { parseNewOrganisation, type NewOrganisationSettings } from './new-organisation.js';
 import type { OrganisationStore } from './organisation.store.js';
 
@@ -30,8 +35,8 @@ export class OrganisationService {
 
   /**
    * Authorisation is checked before the input, so a caller who may not create organisations learns
-   * nothing from validation. The organisation, its default roles and its administrator's membership
-   * are written in one transaction: any refusal leaves nothing behind.
+   * nothing from validation. The organisation, its default roles and their permissions, and its
+   * administrator's membership are written in one transaction: any refusal leaves nothing behind.
    */
   async create(actor: PlatformActorRef, input: unknown): Promise<CreatedOrganisation> {
     await this.assertCanCreateOrganisations(actor);
@@ -53,6 +58,10 @@ export class OrganisationService {
       const admin = existing ?? (await tx.createInvitedUser(email));
 
       const roles = await tx.createRoles(DEFAULT_ORGANISATION_ROLE_NAMES);
+      for (const role of roles) {
+        const permissions = DEFAULT_ROLE_PERMISSIONS[role.name as DefaultOrganisationRoleName] ?? [];
+        if (permissions.length > 0) await tx.grantPermissions(role.id, permissions);
+      }
       const adminRole = roles.find((role) => role.name === ORGANISATION_ADMINISTRATOR_ROLE_NAME);
       if (!adminRole) throw new Error('The default roles do not include the organisation administrator role');
 

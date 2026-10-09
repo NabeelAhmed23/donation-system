@@ -117,6 +117,38 @@ administrator's membership in one transaction. These parts are not done here:
   organisation administrator is not shown it. Until then the API refuses everyone else with 403
   `PLATFORM_ACCESS_REFUSED`, and the form reports that refusal.
 
+## Organisation settings (US-2)
+
+`GET /organisation/settings` and `PATCH /organisation/settings` let a member holding the
+`organisation-settings` `view` / `edit` permissions (seeded for the Organisation Administrator role)
+maintain their own organisation's name, description, country, default currency, time zone, contact
+details and address. The organisation is taken from the session, never from the request.
+
+- A `PATCH` carries only the fields that change, plus the version it was based on as
+  `If-Match: "3"`. Without it the answer is 428 `IF_MATCH_REQUIRED`; if someone saved first it is
+  409 `STALE_VERSION`, so a second administrator never overwrites the first without warning.
+- Every change writes an `audit_log` entry (actor, time, old and new values of the changed fields)
+  in the same transaction. `audit_log` is tenant-isolated by RLS and append-only: a trigger refuses
+  `UPDATE` and `DELETE` whoever connects.
+- Changing the default currency or time zone changes only the `organisations` row; recorded
+  donations keep their own currency, amount and date.
+
+### Known follow-ups from US-2
+
+- **Organisation in the session.** The routes read `session.orgId`, and nothing sets it yet. The
+  sign-in / HTTP bootstrap story must resolve the user's membership at login and store its `org_id`;
+  until then the routes answer 403 `ORGANISATION_REQUIRED`.
+- **PermissionGuard.** Permissions are read from `role_permissions` on every call inside the service.
+  The `@RequirePermission` guard and the session permission cache (`perms_version`) are not built.
+- **Audit (US-53).** `audit_log` has no hash chain (`prev_hash`, `hash`) and no impersonation
+  columns yet. Settings changes are refused while impersonating until the session carries the
+  original actor, so the audit entry can name them.
+- **Tenant-scoped client.** `PrismaOrganisationSettingsStore` sets `app.org_id` itself, like the
+  onboarding store; it should move onto `TenantPrisma` when that lands.
+- **UI route.** `OrganisationSettingsForm` is not mounted yet (no router or `/me`).
+- **Donations.** When donations are modelled, that story must add a regression test that a currency
+  or time-zone change leaves existing donations' currency, amount and date unchanged.
+
 ## Architecture
 
 - [Extension points for charity-specific features](docs/architecture/extension-points.md) (US-67, REQ-063)

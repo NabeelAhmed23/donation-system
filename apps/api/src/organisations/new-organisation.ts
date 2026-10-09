@@ -39,6 +39,16 @@ const COUNTRY_PATTERN = /^[A-Z]{2}$/;
 const CURRENCY_PATTERN = /^[A-Z]{3}$/;
 const CURRENCIES = new Set(Intl.supportedValuesOf('currency'));
 
+/** An upper-case ISO 3166-1 alpha-2 code, e.g. GB. */
+export function isCountryCode(value: string): boolean {
+  return COUNTRY_PATTERN.test(value);
+}
+
+/** An upper-case ISO 4217 code that the system can format and record amounts in. */
+export function isSupportedCurrency(value: string): boolean {
+  return CURRENCY_PATTERN.test(value) && CURRENCIES.has(value);
+}
+
 /** Every problem is reported at once, so the form can mark each missing or invalid field. */
 export function parseNewOrganisation(input: unknown): NewOrganisation {
   const body = typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
@@ -64,12 +74,12 @@ export function parseNewOrganisation(input: unknown): NewOrganisation {
   }
 
   const country = read('country')?.toUpperCase();
-  if (country !== undefined && !COUNTRY_PATTERN.test(country)) {
+  if (country !== undefined && !isCountryCode(country)) {
     invalid('country', 'Country must be a two-letter ISO 3166-1 code, e.g. GB');
   }
 
   const defaultCurrency = read('defaultCurrency')?.toUpperCase();
-  if (defaultCurrency !== undefined && !(CURRENCY_PATTERN.test(defaultCurrency) && CURRENCIES.has(defaultCurrency))) {
+  if (defaultCurrency !== undefined && !isSupportedCurrency(defaultCurrency)) {
     invalid('defaultCurrency', 'Default currency must be a three-letter ISO 4217 code, e.g. GBP');
   }
 
@@ -96,7 +106,7 @@ export function parseNewOrganisation(input: unknown): NewOrganisation {
 }
 
 /** The canonical IANA name (e.g. "utc" becomes "UTC"), or null when the zone is unknown or a bare offset. */
-function canonicalTimeZone(value: string): string | null {
+export function canonicalTimeZone(value: string): string | null {
   try {
     const resolved = new Intl.DateTimeFormat('en', { timeZone: value }).resolvedOptions().timeZone;
     return /^[A-Za-z]/.test(resolved) ? resolved : null;
