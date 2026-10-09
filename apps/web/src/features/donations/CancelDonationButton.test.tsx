@@ -1,0 +1,1 @@
+Full content is the MODIFY entry for apps/web/src/features/donations/CancelDonationButton.test.tsx in changes (that entry is the complete TSX file that gets committed).
